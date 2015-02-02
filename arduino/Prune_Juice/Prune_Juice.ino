@@ -1,8 +1,10 @@
 #include <SPI.h>
 #include <SD.h>
-#include <Adafruit_VS1053.h>
-#include <RTClib.h>
 #include <Wire.h>
+#include "Adafruit_VS1053.h"
+#include "RTClib.h"
+#include "PJInputManager.h"
+
 
 // mp3 player pins
 #define CLK     9 // SPI Clock, shared with SD card
@@ -27,6 +29,7 @@
 // systems def
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(RESET, CS, DCS, DREQ, CARDCS);
 RTC_DS1307 rtc;
+PJInputManager inputManager(A3,A4,A5);
 
 
 int dumbInc = 0;
@@ -39,6 +42,10 @@ bool musicPlayerWorking = false;
 bool rtcWorking         = false;
 bool sdWorking          = false;
 bool inputWorking       = false;
+
+unsigned long millisStart;
+unsigned long millisEnd;
+unsigned long deltaTime;
 
 void setup() 
 {
@@ -64,7 +71,7 @@ void setup()
    }
    else
    {
-    musicPlayerWorking = true;
+     musicPlayerWorking = true;
    }
 
   // rtc init
@@ -91,11 +98,21 @@ void setup()
     sdWorking = true;
   }
 
+  deltaTime = 0;
+  millisStart = 0;
+  millisEnd = 0;
+
    //musicPlayer.startPlayingFile("track001.mp3");
 }
 
 void loop()
 {
+  if(millisEnd > millisStart) // just in case of rollover, safer to use last delta
+  {
+    deltaTime = millisEnd - millisStart;
+  }
+  
+  millisStart = micros();
   ++dumbInc;
 
   // just a binary vidual counter
@@ -104,14 +121,35 @@ void loop()
     if(++numberToDisplay >= 256)
     {
       numberToDisplay = 0; 
+    }
       updateDisplay();
+      Serial.print("delta: ");
+      Serial.print(deltaTime);
+      Serial.println();
+  }
+
+  inputManager.update();
+  if( inputManager.inputDirection() != 0 )
+  {
+    Serial.print("direction: ");
+    Serial.println(inputManager.inputDirection());
+
+    if( inputManager.inputDirection() == 1 )
+    {
+      musicPlayer.startPlayingFile("track001.mp3");
+    }
+    else
+    {
+      musicPlayer.stopPlaying();
     }
   }
+
+  millisEnd = micros();
 }
 
 void notifyError()
 {
-  Serial.println("something went wrong")
+  Serial.println("something went wrong");
 
   if(displayWorking)
   {
@@ -157,9 +195,9 @@ void updateDisplay()
   // an idea would be to store the last set display and only
   // if the new display is different to push it to the display
 
-  Serial.print("number: " );
-  Serial.print(numberToDisplay);
-  Serial.println();
+  //Serial.print("number: " );
+  //Serial.print(numberToDisplay);
+  //Serial.println();
 
   digitalWrite(DISP_LATCHPIN, LOW);
   shiftOut(DISP_DATAPIN, DISP_CLOCKPIN, MSBFIRST, numberToDisplay);
