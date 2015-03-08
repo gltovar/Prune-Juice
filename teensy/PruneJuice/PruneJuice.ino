@@ -31,6 +31,8 @@
 
 #define MICROS_ONE_SECOND 1000000
 
+#define FILE_NAME_LENGTH 12 // 12 character and a newline
+#define MUSIC_FOLDER_LENGTH 7
 #define concat(first, second) first second
 #define DIR_MUSIC "/music/"
 #define DIR_CACHE "/cache/"
@@ -77,7 +79,9 @@ float volumeOffset = 14.0f;
 float volumeScale = -7.1f;
 
 uint16_t* musicPlayOrder = 0;
-uint16_t* myArraySize = 0;
+uint16_t musicTotalCount = 0;
+uint16_t musicPlayingIndex = 0;
+bool musicActive = true;
 
 
 void setup() {
@@ -85,14 +89,56 @@ void setup() {
 	delay(3000);
 }
 
-void playFile(const char *filename)
+void playNextSong()
 {
+	
+
+	//char filePath[MUSIC_FOLDER_LENGTH + FILE_NAME_LENGTH];
+	//strcpy(filePath, DIR_MUSIC);
+
+	char filePath[MUSIC_FOLDER_LENGTH+FILE_NAME_LENGTH];
+
+	strcpy(filePath, DIR_MUSIC);
+
+	File l_musicCache = SD.open(CACHE_MUSIC);
+	
+	unsigned long l_filelength = FILE_NAME_LENGTH + 2;
+	unsigned long l_musicIndex = musicPlayOrder[musicPlayingIndex];
+
+	Serial.print("track index: ");
+	Serial.println(l_musicIndex);
+
+	unsigned long seekPosition = l_filelength * (l_musicIndex);
+	Serial.print("Seek pos: ");
+	Serial.println(seekPosition);
+	l_musicCache.seek(seekPosition);
+	int8_t l_readIndex = 0;
+	while (l_readIndex < FILE_NAME_LENGTH)
+	{
+		filePath[MUSIC_FOLDER_LENGTH+l_readIndex] = l_musicCache.read();
+		++l_readIndex;
+	}
+	filePath[MUSIC_FOLDER_LENGTH + l_readIndex] = '\0';
+	
+	l_musicCache.close();
+
 	Serial.print("Playing file: ");
-	Serial.println(filename);
+	Serial.println(filePath);
+	playMp31.play(filePath);
+	++musicPlayingIndex;
+
+	if (musicPlayingIndex >= musicTotalCount)
+	{
+		musicPlayingIndex = 0;
+		randomizePlayOrder();
+	}
+
+
+	//Serial.println(filename);
 
 	// Start playing the file.  This sketch continues to
 	// run while the file plays.
-	playMp31.play(filename);
+	//playMp31.play(filename);
 
 	// Simply wait for the file to finish playing.
 	/*while (playMp31.isPlaying()) {
@@ -137,6 +183,7 @@ void loop()
 
 	EXEC(coreloop);
 	updateInput();
+	musicCheck();
 
 	unsigned long l_microsEnd = micros();
 
@@ -144,6 +191,14 @@ void loop()
 	if (l_microsEnd > l_microsStart)
 	{
 		microsDeltaTime = l_microsEnd - l_microsStart;
+	}
+}
+
+void musicCheck()
+{
+	if (workingMusic && musicActive && playMp31.isPlaying() == false)
+	{
+		playNextSong();
 	}
 }
 
@@ -172,13 +227,6 @@ State stateInitialize()
 	clearDisplay();
 	workingDisplay = true;
 
-	// Audio connections require memory to work.  For more
-	// detailed information, see the MemoryAndCpuUsage example
-	AudioMemory(5);
-	sgtl5000_1.enable();
-	sgtl5000_1.volume(0.5);
-	workingMusic = true;
-
 	SPI.setMOSI(PIN_MOSI);
 	SPI.setSCK(PIN_CLK);
 	if (!(SD.begin(10))) {
@@ -191,17 +239,18 @@ State stateInitialize()
 	}
 	workingSD = true;
 
-	Serial.println("starting statePopulateMusic");
-
-	coreloop.Set(statePopulateMusic);
-	//coreloop.Set(stateIdle);
+	// Audio connections require memory to work.  For more
+	// detailed information, see the MemoryAndCpuUsage example
+	AudioMemory(5);
+	sgtl5000_1.enable();
+	sgtl5000_1.volume(0.5);
+	populateMusic();
+	workingMusic = true;
+	
+	coreloop.Set(stateIdle);
 }
 
-uint16_t musicTotalCount = 0;
-
-byte tmp;
-
-State statePopulateMusic()
+void populateMusic()
 {
 	bool l_startIdle = false;
 	char* l_currentFileName;
@@ -243,7 +292,15 @@ State statePopulateMusic()
 
 	musicPlayOrder = new uint16_t[musicTotalCount];
 
+	randomizePlayOrder();
 
+	Serial.println("starting idle");
+	//playMp31.play("track001.mp3");
+	coreloop.Set(stateIdle);
+}
+
+void randomizePlayOrder()
+{
 	uint16_t i = 0;
 
 	for (i = 0; i <= musicTotalCount; ++i)
@@ -252,24 +309,20 @@ State statePopulateMusic()
 	}
 
 	Entropy.Initialize();
-	Serial.print("Starting to draw random sequences from 1 to ");
-	Serial.println(musicTotalCount);
+	Serial.print("Starting to draw random sequences from 0 to ");
+	Serial.println(musicTotalCount-1);
 
-
-	for (i = 0; i <= musicTotalCount; ++i)
+	byte tmp;
+	for (i = 0; i < musicTotalCount; ++i)
 	{
-		tmp = Entropy.random(1, (musicTotalCount + 1) - i);
+		tmp = Entropy.random(0, (musicTotalCount-1) - i);
 		Serial.print(musicPlayOrder[tmp]);
-		if (i < musicTotalCount)
+		if (i < musicTotalCount-1)
 		{
 			Serial.print(",");
 		}
-		swap(tmp, (musicTotalCount + 1) - i);
+		swap(tmp, (musicTotalCount-1) - i);
 	}
-
-	Serial.println("starting idle");
-	playMp31.play("track001.mp3");
-	coreloop.Set(stateIdle);
 }
 
 void swap(uint16_t a, uint16_t b)
@@ -281,16 +334,6 @@ void swap(uint16_t a, uint16_t b)
 
 State stateIdle()
 {
-	/*int prevLed = currentLed;
-	++currentLed;
-	if (currentLed >= NUM_LEDS)
-	{
-		currentLed = 0;
-	}
-	leds[prevLed] = CHSV(hue, 255, 60);
-	leds[currentLed] = CHSV(++hue, 255, 120);
-	FastLED.show();
-	delay(16);*/
 
 	if (clickEncoder.getButton() == ClickEncoder::Clicked)
 	{
@@ -298,10 +341,12 @@ State stateIdle()
 		if (playMp31.isPlaying())
 		{
 			playMp31.stop();
+			musicActive = false;
 		}
 		else
 		{
-			playMp31.play("track001.mp3");
+			playNextSong();
+			musicActive = true;
 		}
 	}
 
@@ -413,7 +458,7 @@ void showDisplay()
 	FastLED.setBrightness(25); // just to keep it powerable by the teensy for now
 
 	FastLED.show();
-	}
+}
 
 
 // http://playground.arduino.cc/Main/Fscale
