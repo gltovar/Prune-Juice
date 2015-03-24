@@ -15,6 +15,7 @@
 #include "SM.h"
 #include <math.h>
 #include <Entropy.h>
+#include "Time.h"
 
 //pin defines
 #define PIN_CLK					14
@@ -31,14 +32,16 @@
 
 #define MICROS_ONE_SECOND 1000000
 
+
 #define FILE_NAME_LENGTH 12 // 12 character and a newline
 #define MUSIC_FOLDER_LENGTH 7
 #define concat(first, second) first second
 #define DIR_MUSIC "/music/"
 #define DIR_CACHE "/cache/"
-
 #define CACHE_MUSIC	concat(DIR_CACHE,"music.txt")
 
+
+#define TIME_HEADER "T"
 
 // GUItool: begin automatically generated code
 AudioPlaySdMp3           playMp31;       //xy=154,78
@@ -72,9 +75,9 @@ long stateTimeCurrent = 0;
 long stateDurationVolumeChange = 2 * MICROS_ONE_SECOND;
 
 
-float volumeCurrent = 15.0f;
+float volumeCurrent = 18.0f;
 float volumeMin = 0.0f;
-float volumeMax = 50.0f;
+float volumeMax = 25.0f;
 float volumeOffset = 14.0f;
 float volumeScale = -7.1f;
 
@@ -82,6 +85,10 @@ uint16_t* musicPlayOrder = 0;
 uint16_t musicTotalCount = 0;
 uint16_t musicPlayingIndex = 0;
 bool musicActive = true;
+
+int timeCurrentHour = 0;
+int timeCurrentMinute = 0;
+int timeCurrentSecond = 0;
 
 
 void setup() {
@@ -92,7 +99,6 @@ void setup() {
 void playNextSong()
 {
 	
-
 	//char filePath[MUSIC_FOLDER_LENGTH + FILE_NAME_LENGTH];
 	//strcpy(filePath, DIR_MUSIC);
 
@@ -218,6 +224,11 @@ void updateInput()
 	}
 }
 
+time_t getTeensy3Time()
+{
+	return Teensy3Clock.get();
+}
+
 State stateInitialize()
 {
 	clickEncoder.setAccelerationEnabled(false);
@@ -226,6 +237,27 @@ State stateInitialize()
 	FastLED.addLeds<NEOPIXEL, PIN_NEO_PIXEL>(leds, NUM_LEDS);
 	clearDisplay();
 	workingDisplay = true;
+
+	setSyncProvider(getTeensy3Time);
+	if (timeStatus() != timeSet)
+	{
+		Serial.println("Unable to synce with the RTC");
+	}
+	else
+	{
+		workingRTC = true;
+		Serial.println("RTC has set the system time");
+
+		if (Serial.available())
+		{
+			time_t t = processSyncMessage();
+			if (t != 0)
+			{
+				Teensy3Clock.set(t);
+				setTime(t);
+			}
+		}
+	}
 
 	SPI.setMOSI(PIN_MOSI);
 	SPI.setSCK(PIN_CLK);
@@ -243,7 +275,7 @@ State stateInitialize()
 	// detailed information, see the MemoryAndCpuUsage example
 	AudioMemory(5);
 	sgtl5000_1.enable();
-	sgtl5000_1.volume(0.5);
+	sgtl5000_1.volume(1.0f - (volumeCurrent / volumeMax));
 	populateMusic();
 	workingMusic = true;
 	
@@ -332,8 +364,64 @@ void swap(uint16_t a, uint16_t b)
 	musicPlayOrder[b] = t;
 }
 
+long idleAnimationDuration = 16000; //micros
+long idleAnimationCurrentTime = 0;
+
+uint8_t brtMax = 120;
+uint8_t brtCur = 120;
+bool	brtInc = true;
+
 State stateIdle()
 {
+	/*if (idleAnimationCurrentTime <= 0)
+	{
+		if (musicActive)
+		{
+			brtCur = brtMax;
+			++hue;
+		}
+		else
+		{
+			if (brtInc)
+			{
+				if (brtCur + 1 < brtMax)
+				{
+					++brtCur;
+				}
+				else
+				{
+					brtInc = false;
+				}
+			}
+			else
+			{
+				if (brtCur - 1 >= 10)
+				{
+					--brtCur;
+				}
+				else
+				{
+					brtInc = true;
+				}
+			}
+		}
+
+		
+		currentLed = 0;
+		while (currentLed < NUM_LEDS)
+		{
+			leds[currentLed] = CHSV(hue, 255, brtCur);
+			++currentLed;
+		}
+
+		showDisplay();
+		idleAnimationCurrentTime = idleAnimationDuration;
+	}
+
+	idleAnimationCurrentTime -= microsDeltaTime;
+	*/
+
+	updateClock();
 
 	if (clickEncoder.getButton() == ClickEncoder::Clicked)
 	{
@@ -352,9 +440,93 @@ State stateIdle()
 
 	if (inputActive)
 	{
+		clearDisplay();
 		stateTimeCurrent = stateDurationVolumeChange;
 		coreloop.Set(stateVolumeChange);
 	}
+}
+
+long minuteBreathTime = 0;
+long minuteBreathDurtion = 1 * MICROS_ONE_SECOND;
+bool minuteFadeIn = false;
+uint8_t secondStep = 255.0f / 6.0f;
+
+void updateClock()
+{
+	if (timeCurrentSecond != second())
+	{
+		// time to update the clock;
+
+		clearDisplay();
+
+		timeCurrentHour = hour();
+		timeCurrentMinute = minute();
+		timeCurrentSecond = second();
+
+		minuteBreathTime = minuteBreathDurtion;
+
+		Serial.print("updating time: ");
+		Serial.print(timeCurrentHour);
+		Serial.print(":");
+		Serial.print(timeCurrentMinute);
+		Serial.print(":");
+		Serial.println(timeCurrentSecond);
+	}
+
+	if (minuteBreathTime < 0)
+	{
+		minuteBreathTime = 0;
+	}
+
+	uint8_t l_ledHour = (timeCurrentHour <= 11) ? timeCurrentHour : timeCurrentHour - 12; // maybe will have to be 11
+	
+	// TODO cache all time to led conversion calculations
+
+	uint8_t l_ledMinute = (float(timeCurrentMinute)/60.0f)*NUM_LEDS;
+	
+	uint8_t l_ledSeconds1 = (float(timeCurrentSecond) / 60.0f)*NUM_LEDS; 
+
+	float l_secondsPercent = ((float(timeCurrentSecond) / 60.0f)*float(NUM_LEDS)) - float(l_ledSeconds1); // want the percentage remaining. if 6.57 then this value will hold the .57
+	
+	uint8_t l_ledSeconds2 = (l_ledSeconds1 + 1 >= NUM_LEDS) ? 0 : l_ledSeconds1 + 1;
+
+	float l_minuteBreathPercent = (float(minuteBreathTime) / float(minuteBreathDurtion));
+
+	uint8_t l_ledBrightness1 = 255.0f * (1.0f - l_secondsPercent);
+	uint8_t l_ledBrightness2 = 255.0f * l_secondsPercent;
+
+	//uint8_t l_ledMinuteBrigthness = float(255.0f*l_minuteBreathPercent);
+
+	leds[l_ledHour] = CHSV(HSVHue::HUE_GREEN, 255, 255);
+	leds[l_ledMinute] = CHSV(HSVHue::HUE_BLUE, 255, 255);
+	leds[l_ledSeconds1] = CHSV(HSVHue::HUE_RED, 255, l_ledBrightness1 * l_minuteBreathPercent);
+	leds[l_ledSeconds2] = CHSV(HSVHue::HUE_RED, 255, l_ledBrightness2 * (1.0f - l_minuteBreathPercent));
+	
+	//leds[l_ledSeconds1] += CRGB(secondStep * l_minuteBreathPercent, 0, 0);
+	//leds[l_ledSeconds2] -= CRGB(secondStep * l_minuteBreathPercent, 0, 0);
+
+	showDisplay();
+	
+	minuteBreathTime -= microsDeltaTime;
+
+	idleAnimationCurrentTime -= microsDeltaTime;
+
+	/*if (idleAnimationCurrentTime <= 0)
+	{
+		Serial.print("seconds1 led: ");
+		Serial.print(l_ledSeconds1);
+		Serial.print(", seconds2 led: ");
+		Serial.print(l_ledSeconds2);
+		Serial.print(", diff: ");
+		Serial.print(l_secondsPercent);
+		Serial.print(", brightness1: ");
+		Serial.print(l_ledBrightness1); 
+		Serial.print(", brightness2: ");
+		Serial.print(l_ledBrightness2);
+		Serial.print(", breath percent: ");
+		Serial.println(l_minuteBreathPercent);
+		idleAnimationCurrentTime = idleAnimationDuration;
+	}*/
 }
 
 State stateVolumeChange()
@@ -372,7 +544,7 @@ State stateVolumeChange()
 
 		
 		//Serial.println(l_volume);
-		sgtl5000_1.volume(1.0f-(volumeCurrent / volumeMax));
+		sgtl5000_1.volume(1-(volumeCurrent / volumeMax));
 
 		// if inpute is detected reset the current state's duration
 		stateTimeCurrent = stateDurationVolumeChange;
@@ -422,6 +594,12 @@ State stateVolumeChange()
 	showDisplay();
 
 	checkForFinishedState(stateIdle, true);
+
+	if (clickEncoder.getButton() == ClickEncoder::Clicked)
+	{
+		// INVESTIAGE STATE TIME!!!
+		stateTimeCurrent = 0;
+	}
 }
 
 bool checkForFinishedState(Pstate nextState, bool shouldClearDisplay)
@@ -538,4 +716,32 @@ float fscale(float originalMin,
 	}
 
 	return rangedValue;
+}
+
+
+unsigned long processSyncMessage()
+{
+	unsigned long pctime = 0L;
+	const unsigned long DEFAULT_TIME = 1357041600; // jan 1 2013
+
+	if (Serial.find(TIME_HEADER))
+	{
+		pctime = Serial.parseInt();
+		if (pctime < DEFAULT_TIME)
+		{
+			pctime = 0L;
+		}
+	}
+
+	return pctime;
+}
+
+void printDigits(int digits)
+{
+	Serial.print(":");
+	if (digits < 10)
+	{
+		Serial.print('0');
+	}
+	Serial.print(digits);
 }
